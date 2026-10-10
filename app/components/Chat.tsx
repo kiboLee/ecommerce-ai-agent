@@ -2,92 +2,102 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { Send } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
+import { exampleQuestions } from '@/lib/constants';
+import { getMockResponse } from '@/lib/mockResponses';
 
 interface Message {
   id: string;
   type: 'user' | 'assistant';
   content: string;
-  timestamp: Date;
 }
 
-const sampleResponses: Record<string, string> = {
-  '배송': '주문번호 #12345의 배송현황을 확인했습니다.\n\n📦 상태: 배송 중\n🚚 예상 배송일: 내일\n📍 현재위치: 부산 배송센터\n\n추가 도움이 필요하시면 알려주세요!',
-  '주문': '최근 주문 내역입니다.\n\n1️⃣ 무선 이어폰 (₩89,000) - 2024.11.20\n2️⃣ USB-C 케이블 3개팩 (₩15,000) - 2024.11.18\n3️⃣ 휴대폰 케이스 (₩25,000) - 2024.11.15\n\n자세한 내용을 알고 싶은 주문이 있나요?',
-  '환불': '환불 절차를 안내해드리겠습니다.\n\n📋 환불 가능 기한: 구매 후 14일 이내\n📩 신청 방법: 마이페이지 > 주문/배송 > 환불신청\n⏰ 처리기간: 신청 후 3~5 영업일\n💳 환불계좌: 원래 결제 수단으로 자동 환불\n\n환불 신청을 도와드릴까요?',
-  '추천': '무선 이어폰 추천입니다!\n\n🎧 인기 상품:\n• 프리미엄 노이즈캔슬 이어폰 (₩189,000)\n  ⭐ 평점: 4.8/5 (1,234개 리뷰)\n• 스포츠 방수 이어폰 (₩79,000)\n  ⭐ 평점: 4.6/5 (856개 리뷰)\n• 가성비 무선 이어폰 (₩49,000)\n  ⭐ 평점: 4.5/5 (2,103개 리뷰)\n\n상세정보나 구매를 도와드릴까요?',
-  'default': '안녕하세요! 무엇을 도와드릴까요?\n\n다음과 같이 도움을 드릴 수 있습니다:\n• 주문 조회\n• 배송 현황 확인\n• 환불 및 교환\n• 상품 검색\n• 기타 고객 지원\n\n편한 말로 물어봐주세요!'
+interface ChatProps {
+  // 메인 화면에서 선택한 질문 (있으면 대화 시작과 동시에 전송)
+  initialQuery?: string | null;
+}
+
+const GREETING_MESSAGE: Message = {
+  id: 'greeting',
+  type: 'assistant',
+  content: '안녕하세요! Ecommerce AI Agent입니다. 무엇을 도와드릴까요?'
 };
 
-export function Chat() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      type: 'assistant',
-      content: '안녕하세요! Ecommerce AI Agent입니다. 무엇을 도와드릴까요?',
-      timestamp: new Date()
-    }
-  ]);
+const ERROR_MESSAGE = '죄송합니다. 응답을 가져오는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
+const MAX_INPUT_LENGTH = 500;
+const RESPONSE_DELAY_MS = 500;
+
+const createUserMessage = (content: string): Message => ({
+  id: crypto.randomUUID(),
+  type: 'user',
+  content
+});
+
+export function Chat({ initialQuery = null }: ChatProps) {
+  const [messages, setMessages] = useState<Message[]>(() =>
+    initialQuery ? [GREETING_MESSAGE, createUserMessage(initialQuery)] : [GREETING_MESSAGE]
+  );
   const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  // 응답을 기다리는 사용자 질문 (null이면 대기 중이 아님)
+  const [pendingQuery, setPendingQuery] = useState<string | null>(initialQuery);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  const isLoading = pendingQuery !== null;
+  const isInitialState = messages.length === 1;
+
   // 메시지 끝으로 스크롤
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, isLoading]);
 
-  // 입력된 텍스트에 따라 적절한 응답 선택
-  const getAIResponse = (userMessage: string): string => {
-    const keywords = Object.keys(sampleResponses);
-    for (const keyword of keywords) {
-      if (keyword !== 'default' && userMessage.includes(keyword)) {
-        return sampleResponses[keyword];
+  // AI 응답 시뮬레이션 (언마운트 시 타이머 정리)
+  useEffect(() => {
+    if (pendingQuery === null) return;
+
+    const timerId = setTimeout(() => {
+      let content: string;
+      try {
+        content = getMockResponse(pendingQuery);
+      } catch {
+        content = ERROR_MESSAGE;
+      } finally {
+        setPendingQuery(null);
       }
-    }
-    return sampleResponses['default'];
-  };
+      setMessages(prev => [
+        ...prev,
+        { id: crypto.randomUUID(), type: 'assistant', content }
+      ]);
+    }, RESPONSE_DELAY_MS);
 
-  const handleSend = async () => {
-    if (!input.trim()) return;
+    return () => clearTimeout(timerId);
+  }, [pendingQuery]);
 
-    // 사용자 메시지 추가
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      type: 'user',
-      content: input,
-      timestamp: new Date()
-    };
+  const sendMessage = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || isLoading) return;
 
-    setMessages(prev => [...prev, userMessage]);
+    setMessages(prev => [...prev, createUserMessage(trimmed)]);
     setInput('');
-    setIsLoading(true);
-
-    // AI 응답 시뮬레이션
-    setTimeout(() => {
-      const aiResponse: Message = {
-        id: (Date.now() + 1).toString(),
-        type: 'assistant',
-        content: getAIResponse(input),
-        timestamp: new Date()
-      };
-      setMessages(prev => [...prev, aiResponse]);
-      setIsLoading(false);
-    }, 500);
+    setPendingQuery(trimmed);
   };
 
-  const handleSampleQuestion = (question: string) => {
-    setInput(question);
+  // form 제출은 한글 IME 조합 중 Enter를 중복 처리하지 않음
+  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    sendMessage(input);
   };
 
   return (
-    <div className="flex flex-col h-screen bg-background">
+    <div className="flex flex-col h-full min-h-0 bg-background">
       {/* 채팅 영역 */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
-        {messages.length === 1 && (
+      <div
+        role="log"
+        aria-live="polite"
+        aria-label="대화 내용"
+        className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 space-y-4"
+      >
+        {isInitialState && (
           <div className="flex flex-col items-center justify-center min-h-[300px] gap-6">
             <h2 className="text-2xl sm:text-3xl font-bold text-center text-foreground">
               무엇을 도와드릴까요?
@@ -102,14 +112,15 @@ export function Chat() {
         {messages.map(message => (
           <div
             key={message.id}
-            className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
+            className={cn('flex', message.type === 'user' ? 'justify-end' : 'justify-start')}
           >
             <div
-              className={`max-w-xs sm:max-w-md lg:max-w-lg px-4 py-3 rounded-lg whitespace-pre-wrap ${
+              className={cn(
+                'max-w-xs sm:max-w-md lg:max-w-lg px-4 py-3 rounded-lg whitespace-pre-wrap',
                 message.type === 'user'
                   ? 'bg-primary text-primary-foreground'
                   : 'bg-muted text-foreground'
-              }`}
+              )}
             >
               {message.content}
             </div>
@@ -118,11 +129,11 @@ export function Chat() {
 
         {isLoading && (
           <div className="flex justify-start">
-            <div className="bg-muted text-foreground px-4 py-3 rounded-lg">
+            <div className="bg-muted text-foreground px-4 py-3 rounded-lg" aria-label="응답 작성 중">
               <div className="flex gap-2">
-                <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce"></div>
-                <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce delay-100"></div>
-                <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce delay-200"></div>
+                <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" />
+                <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce [animation-delay:100ms]" />
+                <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce [animation-delay:200ms]" />
               </div>
             </div>
           </div>
@@ -132,49 +143,51 @@ export function Chat() {
       </div>
 
       {/* 예시 질문 (초기 상태) */}
-      {messages.length === 1 && !isLoading && (
+      {isInitialState && !isLoading && (
         <div className="px-4 sm:px-6 pb-4 space-y-2">
           <p className="text-sm text-muted-foreground mb-3">예시 질문</p>
           <div className="space-y-2">
-            {[
-              '내 주문 배송 현황 알려줘',
-              '최근 주문한 상품 보여줘',
-              '상품 환불 방법 알려줘',
-              '무선 이어폰 추천해줘'
-            ].map((question, idx) => (
-              <button
-                key={idx}
-                onClick={() => handleSampleQuestion(question)}
-                className="w-full text-left p-3 border border-border rounded-lg hover:bg-muted transition-colors text-sm text-foreground"
+            {exampleQuestions.map(question => (
+              <Button
+                key={question}
+                type="button"
+                variant="outline"
+                onClick={() => sendMessage(question)}
+                className="h-auto w-full justify-start whitespace-normal p-3 text-left text-sm font-normal"
               >
                 {question}
-              </button>
+              </Button>
             ))}
           </div>
         </div>
       )}
 
       {/* 입력창 */}
-      <div className="border-t border-border bg-background p-4 sm:p-6">
+      <form
+        onSubmit={handleSubmit}
+        className="border-t border-border bg-background p-4 sm:p-6"
+      >
         <div className="max-w-4xl mx-auto flex gap-2">
           <input
             type="text"
             value={input}
             onChange={e => setInput(e.target.value)}
-            onKeyPress={e => e.key === 'Enter' && handleSend()}
             placeholder="질문을 입력해주세요..."
+            aria-label="질문 입력"
+            maxLength={MAX_INPUT_LENGTH}
             disabled={isLoading}
             className="flex-1 px-4 py-2 rounded-lg border border-input bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
           />
-          <button
-            onClick={handleSend}
+          <Button
+            type="submit"
+            size="icon-lg"
+            aria-label="전송"
             disabled={isLoading || !input.trim()}
-            className="bg-primary text-primary-foreground p-2 rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors"
           >
             <Send size={20} />
-          </button>
+          </Button>
         </div>
-      </div>
+      </form>
     </div>
   );
 }
